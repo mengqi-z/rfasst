@@ -15,12 +15,13 @@
 #' @importFrom magrittr %>%
 #' @export
 
-m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries,saveOutput=T,map=F){
+m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries,prj_path=NULL,read_prj=F,saveOutput=T,map=F){
 
   # Ancillary Functions
   `%!in%` = Negate(`%in%`)
 
-  em.list<-m1_emissions_rescale(db_path,query_path,db_name,prj_name,scen_name,queries,saveOutput=F)
+  em.list<-m1_emissions_rescale(db_path,query_path,db_name,prj_name,scen_name,queries,prj_path,read_prj,saveOutput=F)
+  all_scenarios <- unique(em.list[[1]]$Scenario)
 
   #----------------------------------------------------------------------
   #----------------------------------------------------------------------
@@ -67,21 +68,29 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
   #----------------------------------------------------------------------
   #----------------------------------------------------------------------
   # Delta of emissions between base and scenario
-  delta_em<-tibble::as_tibble(base_em) %>%
-    gcamdata::repeat_add_columns(tibble::tibble(base_year=all_years)) %>%
+  delta_em <- tibble::as_tibble(base_em) %>%
+    gcamdata::repeat_add_columns(tibble::tibble(base_year = all_years)) %>%
     dplyr::select(-year) %>%
-    dplyr::rename(year=base_year,
-           region=COUNTRY) %>%
+    dplyr::rename(year = base_year,
+                  region = COUNTRY) %>%
     dplyr::filter(region != "*TOTAL*") %>%
-    dplyr::mutate(year=as.factor(as.character(year))) %>%
-    gcamdata::left_join_error_no_match(dplyr::bind_rows(em.list) %>% dplyr::mutate(year=as.factor(year)),by=c("region","year","pollutant")) %>%
-    dplyr::mutate(value_div=value.x)
+    dplyr::mutate(year = as.factor(as.character(year)))
+
+  # Joining with different scenarios (MZ)
+  delta_em <- gcamdata::left_join_error_no_match(
+    dplyr::bind_rows(em.list) %>% dplyr::mutate(year = as.factor(year)),
+    delta_em,
+    by = c("region", "year", "pollutant"),
+    suffix = c('.em', '.delta_em')) %>%
+    dplyr::rename(value.x = value.delta_em,
+                  value.y = value.em) %>%
+    dplyr::mutate(value_div = value.x)
 
   # Calculated the normalized CH4 HTAP change
-  delta_em_ch4_htap<-delta_em %>%
-    dplyr::filter(pollutant=="CH4") %>%
-    dplyr::mutate(pollutant="CH4_HTAP",
-           value_div=ch4_htap_pert)
+  delta_em_ch4_htap <- delta_em %>%
+    dplyr::filter(pollutant == "CH4") %>%
+    dplyr::mutate(pollutant = "CH4_HTAP",
+                  value_div = ch4_htap_pert)
 
   delta_em<-delta_em %>%
     dplyr::bind_rows(delta_em_ch4_htap) %>%
@@ -90,9 +99,9 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     dplyr::mutate(delta_em=dplyr::if_else(pollutant=="PM25",0,delta_em)) %>%
     dplyr::arrange(region) %>%
     dplyr::mutate(delta_em = replace(delta_em, is.nan(delta_em), 0),
-           delta_em = replace(delta_em, !is.finite(delta_em), 0),) %>%
+                  delta_em = replace(delta_em, !is.finite(delta_em), 0)) %>%
     dplyr::mutate(region=gsub("AIR","Air",region),
-           region=gsub("SHIP","Ship",region))  %>%
+                  region=gsub("SHIP","Ship",region))  %>%
     #not consider air and ship as in delta_Em_SR in the excel
     dplyr::mutate(delta_em=dplyr::if_else(region %in% c("Air","Ship"),0,delta_em))
 
@@ -116,9 +125,10 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     gcamdata::repeat_add_columns(tibble::tibble(year=all_years)) %>%
     dplyr::mutate(year=as.factor(as.character(year))) %>%
     dplyr::filter(region %!in% c("Ocean","EUR")) %>%
-    gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>%
+    # gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>%
+    dplyr::right_join(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>% # Use right join MZ
     dplyr::mutate(delta_no3=value*delta_em*5) %>%
-    dplyr::group_by(receptor,year) %>%
+    dplyr::group_by(Scenario,receptor,year) %>%  # add scenario by MZ
     dplyr::summarise(delta_no3=sum(delta_no3)) %>%
     dplyr::ungroup() %>%
     dplyr::rename(region=receptor) %>%
@@ -141,9 +151,10 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     gcamdata::repeat_add_columns(tibble::tibble(year=all_years)) %>%
     dplyr::mutate(year=as.factor(as.character(year))) %>%
     dplyr::filter(region %!in% c("Ocean","EUR")) %>%
-    gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>%
+    # gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>%
+    dplyr::right_join(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>% # Use right join MZ
     dplyr::mutate(delta_so4=value*delta_em*5) %>%
-    dplyr::group_by(receptor,year) %>%
+    dplyr::group_by(Scenario, receptor,year) %>% # add scenario by MZ
     dplyr::summarise(delta_so4=sum(delta_so4)) %>%
     dplyr::ungroup() %>%
     dplyr::rename(region=receptor) %>%
@@ -166,9 +177,10 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     gcamdata::repeat_add_columns(tibble::tibble(year=all_years)) %>%
     dplyr::mutate(year=as.factor(as.character(year))) %>%
     dplyr::filter(region %!in% c("Ocean","EUR")) %>%
-    gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>%
+    # gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>%
+    dplyr::right_join(delta_em %>% dplyr::filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region")) %>% # Use right join MZ
     dplyr::mutate(delta_nh4=value*delta_em*5) %>%
-    dplyr::group_by(receptor,year) %>%
+    dplyr::group_by(Scenario, receptor,year) %>% # add scenario by MZ
     dplyr::summarise(delta_nh4=sum(delta_nh4)) %>%
     dplyr::ungroup() %>%
     dplyr::rename(region=receptor) %>%
@@ -186,9 +198,10 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     dplyr::mutate(year=as.factor(as.character(year))) %>%
     dplyr::filter(region %!in% c("Ocean","EUR")) %>%
     #left_join(delta_em %>% filter(pollutant %in% c("NOX","SO2","NH3")),by=c("pollutant","year","region"))
-    gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("BC")),by=c("pollutant","year","region")) %>%
+    # gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("BC")),by=c("pollutant","year","region")) %>%
+    dplyr::right_join(delta_em %>% dplyr::filter(pollutant %in% c("BC")),by=c("pollutant","year","region")) %>% # Use right join MZ
     dplyr::mutate(delta_bc=value*delta_em*5) %>%
-    dplyr::group_by(receptor,year) %>%
+    dplyr::group_by(Scenario,receptor,year) %>% # add scenario by MZ
     dplyr::summarise(delta_bc=sum(delta_bc)) %>%
     dplyr::ungroup() %>%
     dplyr::rename(region=receptor) %>%
@@ -208,9 +221,10 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     gcamdata::repeat_add_columns(tibble::tibble(year=all_years)) %>%
     dplyr::mutate(year=as.factor(as.character(year))) %>%
     dplyr::filter(region %!in% c("Ocean","EUR")) %>%
-    gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("OM")),by=c("pollutant","year","region")) %>%
+    # gcamdata::left_join_error_no_match(delta_em %>% dplyr::filter(pollutant %in% c("OM")),by=c("pollutant","year","region")) %>%
+    dplyr::right_join(delta_em %>% dplyr::filter(pollutant %in% c("OM")),by=c("pollutant","year","region")) %>% # Use right join MZ
     dplyr::mutate(delta_pom=value*delta_em*5) %>%
-    dplyr::group_by(receptor,year) %>%
+    dplyr::group_by(Scenario,receptor,year) %>% # add scenario by MZ
     dplyr::summarise(delta_pom=sum(delta_pom)) %>%
     dplyr::ungroup() %>%
     dplyr::rename(region=receptor) %>%
@@ -230,6 +244,12 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     dplyr::filter(region %!in% c("Air","Ship","Ocean","EUR")) %>%
     gcamdata::repeat_add_columns(tibble::tibble(year=all_years)) %>%
     dplyr::mutate(year=as.factor(as.character(year)))
+
+  delta_dust <- delta_dust %>%
+    dplyr::slice(rep(1:dplyr::n(), times = length(all_scenarios))) %>%
+    dplyr::mutate(Scenario = rep(all_scenarios, each = nrow(delta_dust)))
+
+
   #----------------------------------------------------------------------
   # Sea salt
   delta_ss<-tibble::as_tibble(base_conc) %>%
@@ -239,6 +259,10 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     dplyr::filter(region %!in% c("Air","Ship","Ocean","EUR")) %>%
     gcamdata::repeat_add_columns(tibble::tibble(year=all_years))%>%
     dplyr::mutate(year=as.factor(as.character(year)))
+
+  delta_ss <- delta_ss %>%
+    dplyr::slice(rep(1:dplyr::n(), times = length(all_scenarios))) %>%
+    dplyr::mutate(Scenario = rep(all_scenarios, each = nrow(delta_ss)))
   #----------------------------------------------------------------------
   #----------------------------------------------------------------------
   # Add up all the different PM25
@@ -262,14 +286,14 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
     dplyr::mutate(type=dplyr::if_else(pollutant %in% c("NO3","SO4","NH4"),"SEC","a"),
            type=dplyr::if_else(pollutant %in% c("BC","POM"),"PRIM",type),
            type=dplyr::if_else(pollutant %in% c("DUST","SS"),"NAT",type)) %>%
-    dplyr::group_by(region,year,units,type) %>%
+    dplyr::group_by(Scenario,region,year,units,type) %>%
     dplyr::summarise(value=sum(value)) %>%
     dplyr::ungroup()
   #----------------------------------------------------------------------
 
   # Total PM2.5
   pm25_agg<-pm25 %>%
-    dplyr::group_by(region,year,units) %>%
+    dplyr::group_by(Scenario,region,year,units) %>%
     dplyr::summarise(value=sum(value)) %>%
     dplyr::ungroup()
   #----------------------------------------------------------------------
@@ -284,8 +308,12 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
 
   pm25.write<-function(df){
     df<-as.data.frame(df)
-    colnames(df)<-c("region","year","units","NAT","PRIM","SEC")
-    write.csv(df,paste0("output/","m2/","NAT_PRIM_SEC_PM2.5_",scen_name,"_",unique(df$year),".csv"),row.names = F)
+    colnames(df)<-c("scenario","region","year","units","NAT","PRIM","SEC")
+    if(read_prj == F){
+      write.csv(df,paste0("output/","m2/","NAT_PRIM_SEC_PM2.5_",scen_name,"_",unique(df$year),".csv"),row.names = F)
+    } else {
+      write.csv(df,paste0("output/","m2/","NAT_PRIM_SEC_PM2.5_","AllScenarios_",unique(df$year),".csv"),row.names = F)
+    }
   }
 
   if(saveOutput==T){
@@ -305,8 +333,13 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
 
   pm25.agg.write<-function(df){
     df<-as.data.frame(df)
-    colnames(df)<-c("region","year","units","value")
-    write.csv(df,paste0("output/","m2/","PM2.5_",scen_name,"_",unique(df$year),".csv"),row.names = F)
+    colnames(df)<-c("scenario","region","year","units","value")
+    if(read_prj == F){
+      write.csv(df,paste0("output/","m2/","PM2.5_",scen_name,"_",unique(df$year),".csv"),row.names = F)
+    } else {
+      write.csv(df,paste0("output/","m2/","PM2.5_","AllScenarios_",unique(df$year),".csv"),row.names = F)
+    }
+
   }
 
   if(saveOutput==T){
@@ -323,7 +356,8 @@ m2_get_conc_pm25<-function(db_path,query_path,db_name,prj_name,scen_name,queries
   if(map==T){
     pm25.map<-pm25_agg %>%
       dplyr::rename(subRegion=region)%>%
-      dplyr::filter(subRegion != "RUE") %>%
+      dplyr::filter(subRegion != "RUE",
+                    Scenario %in% scen_name) %>%
       dplyr::mutate(units="ug/m3",
                     year=as.numeric(as.character(year)))
 

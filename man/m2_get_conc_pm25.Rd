@@ -11,6 +11,8 @@ m2_get_conc_pm25(
   prj_name,
   scen_name,
   queries,
+  prj_path = NULL,
+  read_prj = F,
   saveOutput = T,
   map = F
 )

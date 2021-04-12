@@ -11,6 +11,8 @@ m1_emissions_rescale(
   prj_name,
   scen_name,
   queries,
+  prj_path = NULL,
+  read_prj = F,
   saveOutput = T,
   map = F
 )
